@@ -47,7 +47,6 @@ def inject_theme() -> None:
                 --abuddy-brown: #5c2b14;
                 --abuddy-green: #1b8f5a;
                 --abuddy-text: #2b1d12;
-                --abuddy-border: rgba(215, 38, 56, 0.22);
             }
             html, body, [data-testid="stAppViewContainer"] {
                 color-scheme: light !important;
@@ -107,11 +106,10 @@ def inject_theme() -> None:
             .stButton > button {
                 width: 100%;
                 border-radius: 999px;
-                border: 1px solid var(--abuddy-border);
-                min-height: 3.2rem;
+                border: none;
+                min-height: 3.3rem;
                 font-weight: 800;
-                background: #fff3d6 !important;
-                color: var(--abuddy-text) !important;
+                font-size: 1.05rem;
             }
             .stFormSubmitButton > button {
                 width: 100%;
@@ -119,19 +117,19 @@ def inject_theme() -> None:
                 border-radius: 999px;
                 font-weight: 800;
             }
-            .stButton > button:hover {
-                background: #ffe9b0 !important;
-            }
-            .stButton > button:active {
-                background: #ffd778 !important;
-            }
             .stTextInput input,
             .stNumberInput input,
             [data-baseweb="select"] > div {
                 border-radius: 999px !important;
-                border: 1px solid var(--abuddy-border) !important;
                 color: var(--abuddy-text) !important;
                 background: rgba(255, 255, 255, 0.96) !important;
+                font-size: 1.15rem !important;
+                min-height: 3.2rem !important;
+            }
+            [data-testid="stWidgetLabel"] p,
+            .stCaption,
+            p {
+                color: var(--abuddy-text) !important;
             }
             .abuddy-positive {
                 color: var(--abuddy-green);
@@ -153,9 +151,19 @@ def inject_theme() -> None:
                     padding-left: 0.7rem;
                     padding-right: 0.7rem;
                 }
+                [data-testid="stWidgetLabel"] p {
+                    font-size: 1.05rem !important;
+                    font-weight: 700 !important;
+                }
+                .stTextInput input,
+                .stNumberInput input,
+                [data-baseweb="select"] > div {
+                    font-size: 1.25rem !important;
+                    min-height: 3.6rem !important;
+                }
                 .stButton > button {
-                    min-height: 3.55rem;
-                    font-size: 1.05rem;
+                    min-height: 3.8rem;
+                    font-size: 1.15rem;
                 }
             }
         </style>
@@ -211,76 +219,6 @@ def parse_amount_input(raw_value: str) -> float | None:
         return None
 
     return int(digits_only) / 100.0
-
-
-def _apply_keypad_token(current_value: str, token: str) -> str:
-    current = str(current_value or "")
-    if token == "⌫":
-        return current[:-1]
-    if token == "C":
-        return ""
-    if token == ".":
-        if "." in current:
-            return current
-        return "0." if not current else f"{current}."
-    if token.isdigit():
-        return f"{current}{token}"
-    return current
-
-
-def _queue_keypad_token(field_key: str, token: str) -> None:
-    st.session_state[f"{field_key}__pending_token"] = token
-
-
-def _apply_queued_keypad_token(field_key: str) -> None:
-    pending_key = f"{field_key}__pending_token"
-    token = st.session_state.get(pending_key)
-    if token is None:
-        return
-
-    current_value = str(st.session_state.get(field_key, ""))
-    st.session_state[field_key] = _apply_keypad_token(current_value, str(token))
-    st.session_state[pending_key] = None
-
-
-def render_amount_keypad(field_key: str, keypad_key_prefix: str) -> None:
-    if field_key not in st.session_state:
-        st.session_state[field_key] = ""
-
-    st.caption("Tap keypad")
-    keypad_rows = [
-        ["1", "2", "3"],
-        ["4", "5", "6"],
-        ["7", "8", "9"],
-        [".", "0", "⌫"],
-    ]
-
-    for row_index, row in enumerate(keypad_rows):
-        columns = st.columns(3, gap="small")
-        for column_index, token in enumerate(row):
-            columns[column_index].button(
-                token,
-                key=f"{keypad_key_prefix}_keypad_{row_index}_{column_index}",
-                use_container_width=True,
-                on_click=_queue_keypad_token,
-                args=(field_key, token),
-            )
-
-    action_columns = st.columns([2, 1], gap="small")
-    action_columns[0].button(
-        "Clear",
-        key=f"{keypad_key_prefix}_keypad_clear",
-        use_container_width=True,
-        on_click=_queue_keypad_token,
-        args=(field_key, "C"),
-    )
-    action_columns[1].button(
-        "00",
-        key=f"{keypad_key_prefix}_keypad_double_zero",
-        use_container_width=True,
-        on_click=_queue_keypad_token,
-        args=(field_key, "00"),
-    )
 
 
 def pie_figure(pie_data: pd.DataFrame, colors: list[str]) -> go.Figure:
@@ -350,14 +288,12 @@ def render_transaction_forms(category_options: list[str], effective_today: date)
     st.subheader("Quick cash moves")
 
     entry_date = st.date_input("Date", value=effective_today, key="quick_date")
-    _apply_queued_keypad_token("quick_amount_text")
     amount_input = st.text_input(
-        "Amount (type digits, e.g. 123456 → $1,234.56)",
+        "Amount",
         value="",
         key="quick_amount_text",
-        placeholder="0",
+        placeholder="0.00",
     )
-    render_amount_keypad("quick_amount_text", "quick")
 
     parsed_amount = parse_amount_input(amount_input)
     if parsed_amount is None:
@@ -410,21 +346,18 @@ def render_transaction_forms(category_options: list[str], effective_today: date)
                 "transaction_type": chosen_transaction_type or default_transaction_type,
             },
         )
-        st.session_state["quick_amount_text__pending_token"] = "C"
         st.success("Transaction saved.")
         st.rerun()
 
 
 def render_forecast(snapshot: dict) -> None:
     st.subheader("What if I spend…")
-    _apply_queued_keypad_token("what_if_amount_text")
     amount_input = st.text_input(
-        "Spend amount now (type digits, e.g. 20000 → $200.00)",
+        "Spend amount now",
         value="",
         key="what_if_amount_text",
-        placeholder="0",
+        placeholder="0.00",
     )
-    render_amount_keypad("what_if_amount_text", "what_if")
     parsed_amount = parse_amount_input(amount_input)
     if parsed_amount is None:
         st.caption("Amount preview: —")
