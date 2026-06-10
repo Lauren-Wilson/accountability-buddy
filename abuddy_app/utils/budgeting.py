@@ -261,6 +261,59 @@ def load_liabilities(data_dir: Path) -> pd.DataFrame:
     return liabilities
 
 
+def derive_liability_balances(
+    liabilities: pd.DataFrame,
+    transactions: pd.DataFrame,
+    reference_date: date,
+) -> pd.DataFrame:
+    """Return liabilities with current balances derived from debt payment transactions.
+
+    The liabilities sheet continues to hold the original balance seed, but the
+    current balance shown in the app is computed from transaction history so the
+    ledger is the source of truth.
+    """
+    derived = liabilities.copy()
+    if derived.empty:
+        derived["original_balance"] = pd.Series(dtype="float64")
+        derived["paid_to_date"] = pd.Series(dtype="float64")
+        derived["current_balance"] = pd.Series(dtype="float64")
+        return derived
+
+    tx = transactions.copy()
+    if tx.empty:
+        derived["original_balance"] = pd.to_numeric(derived["balance"], errors="coerce").fillna(0.0)
+        derived["paid_to_date"] = 0.0
+        derived["current_balance"] = derived["original_balance"].clip(lower=0.0)
+        return derived
+
+    tx["date"] = pd.to_datetime(tx["date"], errors="coerce")
+    tx = tx.dropna(subset=["date"])
+    tx = tx[tx["date"].dt.date <= reference_date].copy()
+    tx["transaction_type"] = tx["transaction_type"].fillna("").astype(str).str.strip().str.lower()
+    tx["category"] = tx["category"].fillna("").astype(str).str.strip().str.lower()
+
+    debt_payments = tx[tx["transaction_type"] == "debt_payment"].copy()
+    debt_payments["amount"] = pd.to_numeric(debt_payments["amount"], errors="coerce").fillna(0.0).abs()
+
+    derived["original_balance"] = pd.to_numeric(derived["balance"], errors="coerce").fillna(0.0)
+    paid_totals: list[float] = []
+    current_balances: list[float] = []
+
+    for _, liability in derived.iterrows():
+        liability_name = str(liability.get("name", "")).strip().lower()
+        paid_to_date = round(
+            debt_payments.loc[debt_payments["category"] == liability_name, "amount"].sum(),
+            2,
+        )
+        current_balance = round(max(0.0, _safe_float(liability.get("original_balance", 0.0)) - paid_to_date), 2)
+        paid_totals.append(paid_to_date)
+        current_balances.append(current_balance)
+
+    derived["paid_to_date"] = paid_totals
+    derived["current_balance"] = current_balances
+    return derived
+
+
 def append_transaction(data_dir: Path, row: dict[str, Any]) -> None:
     if gsheets.is_configured():
         gsheets.append_row("transactions", row, EXPECTED_COLUMNS["transactions"])

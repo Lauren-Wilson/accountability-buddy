@@ -14,6 +14,7 @@ from utils.budgeting import (
     build_pay_period_pie_data,
     build_budget_snapshot,
     build_recurring_status_pie_data,
+    derive_liability_balances,
     ensure_data_files,
     evaluate_what_if,
     get_category_options,
@@ -498,7 +499,7 @@ def render_recent_transactions(transactions: pd.DataFrame) -> None:
     st.dataframe(display, use_container_width=True, hide_index=True)
 
 
-def render_sidebar(settings: dict, effective_today: date, liabilities: pd.DataFrame) -> date:
+def render_sidebar(settings: dict, effective_today: date, liabilities: pd.DataFrame, transactions: pd.DataFrame) -> date:
     st.sidebar.header("Planner settings")
 
     # --- data source indicator ---
@@ -526,16 +527,20 @@ def render_sidebar(settings: dict, effective_today: date, liabilities: pd.DataFr
         st.sidebar.info("No liabilities loaded.")
         return override_date
 
-    for index, liability in liabilities.iterrows():
+    derived_liabilities = derive_liability_balances(liabilities, transactions, override_date)
+
+    for index, liability in derived_liabilities.iterrows():
         with st.sidebar.expander(str(liability["name"]), expanded=index == 0):
+            current_balance = float(liability.get("current_balance", liability["balance"]))
+            current_payment = float(liability.get("current_payment", 0.0))
             comparison = compare_payment_scenarios(
-                balance=liability["balance"],
+                balance=current_balance,
                 apr=liability["apr"],
-                current_payment=liability["current_payment"],
+                current_payment=current_payment,
                 test_payment=st.number_input(
                     f"Test higher payment for {liability['name']}",
-                    min_value=float(liability["current_payment"]),
-                    value=float(liability["current_payment"]),
+                    min_value=current_payment,
+                    value=current_payment,
                     step=10.0,
                     key=f"test_payment_{index}",
                 ),
@@ -544,8 +549,10 @@ def render_sidebar(settings: dict, effective_today: date, liabilities: pd.DataFr
             )
             current = comparison["current"]
             test = comparison["test"]
-            st.write(f"Balance: **{money(float(liability['balance']))}**")
-            st.write(f"Current payment: **{money(float(liability['current_payment']))}**")
+            st.write(f"Original balance: **{money(float(liability['original_balance']))}**")
+            st.write(f"Paid to date: **{money(float(liability['paid_to_date']))}**")
+            st.write(f"Current balance: **{money(current_balance)}**")
+            st.write(f"Current payment: **{money(current_payment)}**")
             if current["months_remaining"] is not None and current["payoff_date"] is not None:
                 st.write(f"Estimated months remaining: **{current['months_remaining']}**")
                 st.write(f"Projected payoff date: **{current['payoff_date'].isoformat()}**")
@@ -568,7 +575,7 @@ def main() -> None:
     recurring_bills = load_recurring_bills(DATA_DIR)
     liabilities = load_liabilities(DATA_DIR)
 
-    effective_today = render_sidebar(settings, date.today(), liabilities)
+    effective_today = render_sidebar(settings, date.today(), liabilities, transactions)
 
     auto_add_due_paychecks(DATA_DIR, transactions, settings, effective_today)
     transactions = load_transactions(DATA_DIR)
