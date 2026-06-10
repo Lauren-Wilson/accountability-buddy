@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from utils.budgeting import (
+    auto_add_due_paychecks,
     append_transaction,
     build_pay_period_pie_data,
     build_budget_snapshot,
@@ -401,6 +402,10 @@ def main() -> None:
     liabilities = load_liabilities(DATA_DIR)
 
     effective_today = render_sidebar(settings, date.today(), liabilities)
+
+    auto_add_due_paychecks(DATA_DIR, transactions, settings, effective_today)
+    transactions = load_transactions(DATA_DIR)
+
     snapshot = build_budget_snapshot(transactions, recurring_bills, settings, effective_today)
     category_options = get_category_options(transactions, recurring_bills, liabilities)
 

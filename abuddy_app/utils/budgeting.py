@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import streamlit as st
 
 from utils import gsheets
 from utils.pay_schedule import (
@@ -13,6 +14,7 @@ from utils.pay_schedule import (
     DEFAULT_PAY_INTERVAL_DAYS,
     clamp_day,
     get_current_pay_period,
+    get_paydays_between,
     get_next_payday,
     get_remaining_paydays_in_month,
 )
@@ -252,6 +254,94 @@ def append_transaction(data_dir: Path, row: dict[str, Any]) -> None:
     combined.to_csv(path, index=False)
 
 
+def auto_add_due_paychecks(
+    data_dir: Path,
+    transactions: pd.DataFrame,
+    settings: dict[str, str],
+    reference_date: date,
+) -> int:
+    """Append missing scheduled paycheck income rows up through reference_date.
+
+    Returns the count of auto-added paycheck transactions.
+    """
+    paycheck_amount = max(0.0, _safe_float(settings.get("paycheck_amount"), 0.0))
+    if paycheck_amount <= 0:
+        return 0
+
+    anchor_payday = _parse_date(settings.get("known_payday"), DEFAULT_KNOWN_PAYDAY)
+    pay_interval_days = max(1, _safe_int(settings.get("pay_interval_days"), DEFAULT_PAY_INTERVAL_DAYS))
+    starting_cash_as_of_setting = str(settings.get("starting_cash_as_of", "")).strip()
+    baseline_start = (
+        _parse_date(starting_cash_as_of_setting, anchor_payday)
+        if starting_cash_as_of_setting
+        else anchor_payday
+    )
+
+    tx = transactions.copy()
+    tx["date"] = pd.to_datetime(tx["date"], errors="coerce")
+    tx = tx.dropna(subset=["date"])
+    tx["transaction_type"] = tx["transaction_type"].fillna("").astype(str).str.strip().str.lower()
+    tx["category"] = tx["category"].fillna("").astype(str).str.strip().str.lower()
+    tx["amount"] = pd.to_numeric(tx["amount"], errors="coerce").fillna(0.0)
+
+    paycheck_rows = tx[
+        (tx["transaction_type"] == "income")
+        & (tx["category"] == "paycheck")
+        & ((tx["amount"].abs() - paycheck_amount).abs() <= 0.01)
+    ]
+
+    if not paycheck_rows.empty:
+        latest_logged_paycheck = paycheck_rows["date"].dt.date.max()
+        start_date = max(baseline_start, latest_logged_paycheck + timedelta(days=1))
+    else:
+        start_date = baseline_start
+
+    if start_date > reference_date:
+        return 0
+
+    due_paydays = get_paydays_between(
+        start_date=start_date,
+        end_date=reference_date,
+        anchor_payday=anchor_payday,
+        interval_days=pay_interval_days,
+    )
+
+    added_count = 0
+    for payday in due_paydays:
+        already_exists = not tx[
+            (tx["transaction_type"] == "income")
+            & (tx["category"] == "paycheck")
+            & (tx["date"].dt.date == payday)
+            & ((tx["amount"].abs() - paycheck_amount).abs() <= 0.01)
+        ].empty
+        if already_exists:
+            continue
+
+        row = {
+            "date": payday.isoformat(),
+            "amount": paycheck_amount,
+            "category": "Paycheck",
+            "note": "Auto-added biweekly paycheck",
+            "transaction_type": "income",
+        }
+
+        try:
+            append_transaction(data_dir, row)
+            added_count += 1
+
+            tx = pd.concat([tx, pd.DataFrame([{
+                "date": pd.to_datetime(payday),
+                "amount": paycheck_amount,
+                "category": "paycheck",
+                "note": "Auto-added biweekly paycheck",
+                "transaction_type": "income",
+            }])], ignore_index=True)
+        except Exception as exc:
+            st.warning(f"Could not auto-add paycheck for {payday.isoformat()}: {exc}")
+
+    return added_count
+
+
 def get_category_options(transactions: pd.DataFrame, bills: pd.DataFrame, liabilities: pd.DataFrame) -> list[str]:
     raw_categories = set(transactions["category"].dropna().astype(str).tolist())
     raw_categories.update(bills["category"].dropna().astype(str).tolist())
@@ -310,7 +400,7 @@ def build_budget_snapshot(
     if starting_cash_as_of_setting:
         starting_cash_as_of = _parse_date(starting_cash_as_of_setting, reference_date)
     else:
-        starting_cash_as_of = reference_date
+        starting_cash_as_of = anchor_payday
 
     through_today = transactions[
         (transactions["date"].dt.date >= starting_cash_as_of) & (transactions["date"].dt.date <= reference_date)
