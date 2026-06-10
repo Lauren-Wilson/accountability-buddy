@@ -46,15 +46,25 @@ def inject_theme() -> None:
                 --abuddy-cream: #fff7e8;
                 --abuddy-brown: #5c2b14;
                 --abuddy-green: #1b8f5a;
+                --abuddy-text: #2b1d12;
+                --abuddy-border: rgba(215, 38, 56, 0.22);
+            }
+            html, body, [data-testid="stAppViewContainer"] {
+                color-scheme: light !important;
             }
             .stApp {
                 background: linear-gradient(180deg, var(--abuddy-cream) 0%, #fffaf1 100%);
-                color: #2b1d12;
+                color: var(--abuddy-text);
             }
             .block-container {
                 padding-top: 3.5rem;
                 padding-bottom: 4rem;
                 max-width: 760px;
+            }
+            [data-testid="stMetricLabel"],
+            [data-testid="stMetricValue"],
+            [data-testid="stMetricDelta"] {
+                color: var(--abuddy-text) !important;
             }
             .abuddy-hero {
                 position: fixed;
@@ -97,15 +107,31 @@ def inject_theme() -> None:
             .stButton > button {
                 width: 100%;
                 border-radius: 999px;
-                border: none;
-                min-height: 3rem;
+                border: 1px solid var(--abuddy-border);
+                min-height: 3.2rem;
                 font-weight: 800;
+                background: #fff3d6 !important;
+                color: var(--abuddy-text) !important;
             }
             .stFormSubmitButton > button {
                 width: 100%;
                 min-height: 3.1rem;
                 border-radius: 999px;
                 font-weight: 800;
+            }
+            .stButton > button:hover {
+                background: #ffe9b0 !important;
+            }
+            .stButton > button:active {
+                background: #ffd778 !important;
+            }
+            .stTextInput input,
+            .stNumberInput input,
+            [data-baseweb="select"] > div {
+                border-radius: 999px !important;
+                border: 1px solid var(--abuddy-border) !important;
+                color: var(--abuddy-text) !important;
+                background: rgba(255, 255, 255, 0.96) !important;
             }
             .abuddy-positive {
                 color: var(--abuddy-green);
@@ -124,6 +150,12 @@ def inject_theme() -> None:
                 }
                 .block-container {
                     padding-top: 4.9rem;
+                    padding-left: 0.7rem;
+                    padding-right: 0.7rem;
+                }
+                .stButton > button {
+                    min-height: 3.55rem;
+                    font-size: 1.05rem;
                 }
             }
         </style>
@@ -220,12 +252,11 @@ def render_amount_keypad(field_key: str, keypad_key_prefix: str) -> None:
         ["1", "2", "3"],
         ["4", "5", "6"],
         ["7", "8", "9"],
-        ["C", "0", "⌫"],
-        ["."],
+        [".", "0", "⌫"],
     ]
 
     for row_index, row in enumerate(keypad_rows):
-        columns = st.columns(len(row))
+        columns = st.columns(3, gap="small")
         for column_index, token in enumerate(row):
             columns[column_index].button(
                 token,
@@ -234,6 +265,22 @@ def render_amount_keypad(field_key: str, keypad_key_prefix: str) -> None:
                 on_click=_queue_keypad_token,
                 args=(field_key, token),
             )
+
+    action_columns = st.columns([2, 1], gap="small")
+    action_columns[0].button(
+        "Clear",
+        key=f"{keypad_key_prefix}_keypad_clear",
+        use_container_width=True,
+        on_click=_queue_keypad_token,
+        args=(field_key, "C"),
+    )
+    action_columns[1].button(
+        "00",
+        key=f"{keypad_key_prefix}_keypad_double_zero",
+        use_container_width=True,
+        on_click=_queue_keypad_token,
+        args=(field_key, "00"),
+    )
 
 
 def pie_figure(pie_data: pd.DataFrame, colors: list[str]) -> go.Figure:
