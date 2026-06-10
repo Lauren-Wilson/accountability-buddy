@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+import re
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -51,13 +52,13 @@ def inject_theme() -> None:
                 color: #2b1d12;
             }
             .block-container {
-                padding-top: 1.2rem;
+                padding-top: 3.5rem;
                 padding-bottom: 4rem;
                 max-width: 760px;
             }
             .abuddy-hero {
                 position: fixed;
-                top: 0.85rem;
+                top: 3.2rem;
                 right: 0.8rem;
                 z-index: 10;
                 width: 84px;
@@ -100,6 +101,12 @@ def inject_theme() -> None:
                 min-height: 3rem;
                 font-weight: 800;
             }
+            .stFormSubmitButton > button {
+                width: 100%;
+                min-height: 3.1rem;
+                border-radius: 999px;
+                font-weight: 800;
+            }
             .abuddy-positive {
                 color: var(--abuddy-green);
                 font-weight: 700;
@@ -110,13 +117,13 @@ def inject_theme() -> None:
             }
             @media (max-width: 640px) {
                 .abuddy-hero {
-                    width: 68px;
-                    height: 68px;
-                    top: 0.5rem;
+                    width: 62px;
+                    height: 62px;
+                    top: 4.4rem;
                     right: 0.45rem;
                 }
                 .block-container {
-                    padding-top: 0.8rem;
+                    padding-top: 4.9rem;
                 }
             }
         </style>
@@ -128,8 +135,8 @@ def inject_theme() -> None:
                 <path d="M47 68 Q60 78 73 68" fill="none" stroke="#2b1d12" stroke-width="4" stroke-linecap="round" />
                 <circle cx="40" cy="64" r="4" fill="#ff9aa8" opacity="0.65" />
                 <circle cx="80" cy="64" r="4" fill="#ff9aa8" opacity="0.65" />
-                <path d="M50 86 L44 104" stroke="#2b1d12" stroke-width="4" stroke-linecap="round" />
-                <path d="M70 86 L76 104" stroke="#2b1d12" stroke-width="4" stroke-linecap="round" />
+                <path d="M26 60 L12 46" stroke="#2b1d12" stroke-width="4" stroke-linecap="round" />
+                <path d="M94 60 L108 46" stroke="#2b1d12" stroke-width="4" stroke-linecap="round" />
                 <ellipse cx="39" cy="107" rx="12" ry="7" fill="#d72638" />
                 <ellipse cx="81" cy="107" rx="12" ry="7" fill="#d72638" />
                 <path d="M36 28 Q48 14 59 24" fill="none" stroke="#d72638" stroke-width="5" stroke-linecap="round" />
@@ -149,6 +156,84 @@ def safe_float(value: object, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def parse_amount_input(raw_value: str) -> float | None:
+    value = str(raw_value or "").strip()
+    if not value:
+        return None
+
+    normalized = re.sub(r"[,$\s]", "", value)
+    if not normalized:
+        return None
+
+    if "." in normalized:
+        try:
+            parsed = float(normalized)
+            return max(parsed, 0.0)
+        except ValueError:
+            return None
+
+    digits_only = re.sub(r"\D", "", normalized)
+    if not digits_only:
+        return None
+
+    return int(digits_only) / 100.0
+
+
+def _apply_keypad_token(current_value: str, token: str) -> str:
+    current = str(current_value or "")
+    if token == "⌫":
+        return current[:-1]
+    if token == "C":
+        return ""
+    if token == ".":
+        if "." in current:
+            return current
+        return "0." if not current else f"{current}."
+    if token.isdigit():
+        return f"{current}{token}"
+    return current
+
+
+def _queue_keypad_token(field_key: str, token: str) -> None:
+    st.session_state[f"{field_key}__pending_token"] = token
+
+
+def _apply_queued_keypad_token(field_key: str) -> None:
+    pending_key = f"{field_key}__pending_token"
+    token = st.session_state.get(pending_key)
+    if token is None:
+        return
+
+    current_value = str(st.session_state.get(field_key, ""))
+    st.session_state[field_key] = _apply_keypad_token(current_value, str(token))
+    st.session_state[pending_key] = None
+
+
+def render_amount_keypad(field_key: str, keypad_key_prefix: str) -> None:
+    if field_key not in st.session_state:
+        st.session_state[field_key] = ""
+
+    st.caption("Tap keypad")
+    keypad_rows = [
+        ["1", "2", "3"],
+        ["4", "5", "6"],
+        ["7", "8", "9"],
+        ["C", "0", "⌫"],
+        ["."],
+    ]
+
+    for row_index, row in enumerate(keypad_rows):
+        columns = st.columns(len(row))
+        for column_index, token in enumerate(row):
+            columns[column_index].button(
+                token,
+                key=f"{keypad_key_prefix}_keypad_{row_index}_{column_index}",
+                use_container_width=True,
+                on_click=_queue_keypad_token,
+                args=(field_key, token),
+            )
 
 
 def pie_figure(pie_data: pd.DataFrame, colors: list[str]) -> go.Figure:
@@ -176,7 +261,6 @@ def pie_figure(pie_data: pd.DataFrame, colors: list[str]) -> go.Figure:
 
 def render_header(snapshot: dict) -> None:
     st.markdown('<div class="abuddy-card">', unsafe_allow_html=True)
-    st.markdown('<div class="abuddy-chip">Manual cash-first budgeting</div>', unsafe_allow_html=True)
     st.markdown('<div class="abuddy-title">Accountability Buddy</div>', unsafe_allow_html=True)
     st.markdown(
         f'<div class="abuddy-subtitle">A-Buddy helps you decide what you can safely spend on {snapshot["reference_date"].isoformat()}.</div>',
@@ -207,7 +291,7 @@ def render_budget_pies(snapshot: dict) -> None:
 
     st.subheader("Current pay period")
     st.caption(
-        f"{snapshot['pay_period_start'].isoformat()} to {snapshot['pay_period_end'].isoformat()}: available cash, unpaid recurring bills due before the next payday, and non-recurring spend so far."
+        f"{snapshot['pay_period_start'].isoformat()} to {snapshot['pay_period_end'].isoformat()}: available cash, remaining recurring bills for this month, and non-recurring spend so far."
     )
     st.plotly_chart(
         pie_figure(build_pay_period_pie_data(snapshot), ["#ffc72c", "#d72638", "#2f9e44"]),
@@ -217,78 +301,105 @@ def render_budget_pies(snapshot: dict) -> None:
 
 def render_transaction_forms(category_options: list[str], effective_today: date) -> None:
     st.subheader("Quick cash moves")
-    add_col, spend_col = st.columns(2)
 
-    with add_col:
-        st.markdown("### + Add Money")
-        with st.form("add_money_form", clear_on_submit=True):
-            entry_date = st.date_input("Date", value=effective_today, key="add_date")
-            amount = st.number_input("Amount", min_value=0.01, step=5.0, value=25.0, key="add_amount")
-            category = st.selectbox("Category", category_options, key="add_category")
-            note = st.text_input("Note", value="", key="add_note")
-            transaction_type = st.selectbox(
-                "Transaction type",
-                ["income", "adjustment"],
-                index=0,
-                key="add_transaction_type",
-            )
-            submitted = st.form_submit_button("Save money entry")
-            if submitted:
-                append_transaction(
-                    DATA_DIR,
-                    {
-                        "date": entry_date.isoformat(),
-                        "amount": amount,
-                        "category": category,
-                        "note": note,
-                        "transaction_type": transaction_type,
-                    },
-                )
-                st.success("Money entry saved.")
-                st.rerun()
+    entry_date = st.date_input("Date", value=effective_today, key="quick_date")
+    _apply_queued_keypad_token("quick_amount_text")
+    amount_input = st.text_input(
+        "Amount (type digits, e.g. 123456 → $1,234.56)",
+        value="",
+        key="quick_amount_text",
+        placeholder="0",
+    )
+    render_amount_keypad("quick_amount_text", "quick")
 
-    with spend_col:
-        st.markdown("### - Spend Money")
-        with st.form("spend_money_form", clear_on_submit=True):
-            entry_date = st.date_input("Date ", value=effective_today, key="spend_date")
-            amount = st.number_input("Amount ", min_value=0.01, step=5.0, value=20.0, key="spend_amount")
-            category = st.selectbox("Category ", category_options, key="spend_category")
-            note = st.text_input("Note ", value="", key="spend_note")
-            transaction_type = st.selectbox(
-                "Transaction type ",
-                ["spend", "debt_payment", "adjustment"],
-                index=0,
-                key="spend_transaction_type",
-            )
-            submitted = st.form_submit_button("Save spend entry")
-            if submitted:
-                signed_amount = -amount if transaction_type == "adjustment" else amount
-                append_transaction(
-                    DATA_DIR,
-                    {
-                        "date": entry_date.isoformat(),
-                        "amount": signed_amount,
-                        "category": category,
-                        "note": note,
-                        "transaction_type": transaction_type,
-                    },
-                )
-                st.success("Spend entry saved.")
-                st.rerun()
+    parsed_amount = parse_amount_input(amount_input)
+    if parsed_amount is None:
+        st.caption("Amount preview: —")
+    else:
+        st.caption(f"Amount preview: **{money(parsed_amount)}**")
+
+    default_category = "Uncategorized"
+    default_transaction_type = "spend"
+    category_suggestions = ["Uncategorized", "General", "Paycheck", "Income", "Reversal"]
+
+    details_categories = []
+    for option in category_suggestions + category_options:
+        if option and option not in details_categories:
+            details_categories.append(option)
+
+    with st.expander("Details"):
+        st.selectbox(
+            "Transaction type",
+            ["spend", "debt_payment", "adjustment", "income"],
+            index=0,
+            key="quick_transaction_type",
+            help="Transaction type controls whether this amount adds to or subtracts from available balance.",
+        )
+        st.selectbox(
+            "Category",
+            options=details_categories,
+            index=0,
+            key="quick_category",
+        )
+        st.text_input("Note", value="", key="quick_note")
+
+    submitted = st.button("Save transaction", use_container_width=True, key="quick_save_transaction")
+    if submitted:
+        if parsed_amount is None or parsed_amount <= 0:
+            st.error("Enter a valid amount greater than $0.00.")
+            return
+
+        chosen_transaction_type = st.session_state.get("quick_transaction_type", default_transaction_type)
+        chosen_category = st.session_state.get("quick_category", default_category)
+        chosen_note = st.session_state.get("quick_note", "")
+
+        append_transaction(
+            DATA_DIR,
+            {
+                "date": entry_date.isoformat(),
+                "amount": parsed_amount,
+                "category": chosen_category or default_category,
+                "note": chosen_note,
+                "transaction_type": chosen_transaction_type or default_transaction_type,
+            },
+        )
+        st.session_state["quick_amount_text__pending_token"] = "C"
+        st.success("Transaction saved.")
+        st.rerun()
 
 
-def render_forecast(snapshot: dict, category_options: list[str]) -> None:
+def render_forecast(snapshot: dict) -> None:
     st.subheader("What if I spend…")
-    with st.form("what_if_form"):
-        col1, col2 = st.columns([1, 1])
-        hypothetical_amount = col1.number_input("Hypothetical spend", min_value=0.0, step=5.0, value=0.0)
-        col2.selectbox("Category", category_options, key="what_if_category")
-        submitted = st.form_submit_button("Run forecast")
+    _apply_queued_keypad_token("what_if_amount_text")
+    amount_input = st.text_input(
+        "Spend amount now (type digits, e.g. 20000 → $200.00)",
+        value="",
+        key="what_if_amount_text",
+        placeholder="0",
+    )
+    render_amount_keypad("what_if_amount_text", "what_if")
+    parsed_amount = parse_amount_input(amount_input)
+    if parsed_amount is None:
+        st.caption("Amount preview: —")
+    else:
+        st.caption(f"Amount preview: **{money(parsed_amount)}**")
+    submitted = st.button("Run forecast", use_container_width=True, key="run_forecast")
 
     if submitted:
-        result = evaluate_what_if(snapshot, hypothetical_amount)
+        if parsed_amount is None or parsed_amount <= 0:
+            st.error("Enter a valid amount greater than $0.00.")
+            return
+
+        result = evaluate_what_if(snapshot, parsed_amount)
+        after_remaining_bills_before_future_income = result.get(
+            "after_remaining_bills_before_future_income",
+            round(result["remaining_after_purchase"] - snapshot["remaining_recurring_bills_total"], 2),
+        )
         st.markdown('<div class="abuddy-card">', unsafe_allow_html=True)
-        st.write(f"Remaining balance after purchase: **{money(result['remaining_after_purchase'])}**")
+        st.write(f"Cash after this spend today: **{money(result['remaining_after_purchase'])}**")
+        st.write(
+            f"Cash after this spend and remaining recurring bills (before future paychecks): **{money(after_remaining_bills_before_future_income)}**"
+        )
         st.write(
             f"Projected end-of-month after purchase (remaining pay periods this month): **{money(result['projected_after_purchase'])}**"
         )
@@ -415,7 +526,7 @@ def main() -> None:
     render_budget_pies(snapshot)
 
     render_transaction_forms(category_options, effective_today)
-    render_forecast(snapshot, category_options)
+    render_forecast(snapshot)
     render_bills(snapshot)
     render_recent_transactions(transactions)
 

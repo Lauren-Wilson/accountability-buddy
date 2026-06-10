@@ -16,6 +16,7 @@ from utils.budgeting import (
     load_settings,
     load_transactions,
 )
+from utils import gsheets
 
 
 def seed_csvs(tmp_data_dir: Path) -> None:
@@ -75,6 +76,9 @@ def count_paychecks_on_day(transactions: pd.DataFrame, day: date) -> int:
 
 
 def run() -> None:
+    # Keep this verification deterministic by forcing local CSV mode.
+    gsheets.is_configured = lambda: False  # type: ignore[assignment]
+
     with tempfile.TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         seed_csvs(data_dir)

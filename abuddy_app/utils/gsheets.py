@@ -29,6 +29,8 @@ SHEET_TAB_NAMES: dict[str, str] = {
     "settings": "settings",
 }
 
+CACHE_TTL_SECONDS = 20
+
 
 # ---------------------------------------------------------------------------
 # Auth helpers
@@ -59,12 +61,22 @@ def _get_client():  # type: ignore[return]
     return gspread.authorize(creds)
 
 
+@st.cache_resource
 def get_spreadsheet():  # type: ignore[return]
     """Return the gspread Spreadsheet object identified by ``spreadsheet_id``."""
     import gspread
 
     client = _get_client()
     return client.open_by_key(str(st.secrets["spreadsheet_id"]))
+
+
+def invalidate_sheet_cache() -> None:
+    """Clear cached worksheet reads.
+
+    Streamlit cache_data only supports function-wide clear, so this currently
+    clears all sheet-tab read cache entries.
+    """
+    _read_sheet_cached.clear()
 
 
 def spreadsheet_url() -> str:
@@ -89,6 +101,9 @@ def ensure_sheet_tabs(
     """
     import gspread
 
+    if st.session_state.get("abuddy_sheet_bootstrapped"):
+        return
+
     spreadsheet = get_spreadsheet()
     existing_tabs = {ws.title for ws in spreadsheet.worksheets()}
 
@@ -111,10 +126,14 @@ def ensure_sheet_tabs(
             # is completely empty.
             worksheet = spreadsheet.worksheet(tab_name)
             try:
-                header = worksheet.row_values(1)
+                all_values = worksheet.get_all_values()
             except gspread.exceptions.APIError:
-                header = []
-            if not header:
+                continue
+
+            has_any_content = any(any(str(cell).strip() for cell in row) for row in all_values)
+            header = all_values[0] if all_values else []
+
+            if not has_any_content or not header:
                 worksheet.append_row(columns, value_input_option="USER_ENTERED")
                 for row in sample_rows.get(key, []):
                     worksheet.append_row(
@@ -122,10 +141,39 @@ def ensure_sheet_tabs(
                         value_input_option="USER_ENTERED",
                     )
 
+    invalidate_sheet_cache()
+    st.session_state["abuddy_sheet_bootstrapped"] = True
+
 
 # ---------------------------------------------------------------------------
 # Read
 # ---------------------------------------------------------------------------
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def _read_sheet_cached(
+    spreadsheet_id: str,
+    key: str,
+    expected_columns: tuple[str, ...],
+) -> pd.DataFrame:
+    import gspread
+
+    try:
+        spreadsheet = get_spreadsheet()
+        worksheet = spreadsheet.worksheet(SHEET_TAB_NAMES[key])
+        records = worksheet.get_all_records(default_blank="")
+        if not records:
+            return pd.DataFrame(columns=list(expected_columns))
+        frame = pd.DataFrame(records)
+        for col in expected_columns:
+            if col not in frame.columns:
+                frame[col] = ""
+        return frame[list(expected_columns)].copy()
+    except gspread.exceptions.WorksheetNotFound:
+        return pd.DataFrame(columns=list(expected_columns))
+    except Exception as exc:
+        st.warning(f"Could not read '{key}' from Google Sheets: {exc}")
+        return pd.DataFrame(columns=list(expected_columns))
 
 
 def read_sheet(key: str, expected_columns: list[str]) -> pd.DataFrame:
@@ -134,24 +182,12 @@ def read_sheet(key: str, expected_columns: list[str]) -> pd.DataFrame:
     Returns an empty DataFrame (with the expected columns) on any error so
     the rest of the app degrades gracefully.
     """
-    import gspread
-
-    try:
-        spreadsheet = get_spreadsheet()
-        worksheet = spreadsheet.worksheet(SHEET_TAB_NAMES[key])
-        records = worksheet.get_all_records(default_blank="")
-        if not records:
-            return pd.DataFrame(columns=expected_columns)
-        frame = pd.DataFrame(records)
-        for col in expected_columns:
-            if col not in frame.columns:
-                frame[col] = ""
-        return frame[expected_columns].copy()
-    except gspread.exceptions.WorksheetNotFound:
-        return pd.DataFrame(columns=expected_columns)
-    except Exception as exc:
-        st.warning(f"Could not read '{key}' from Google Sheets: {exc}")
-        return pd.DataFrame(columns=expected_columns)
+    sid = str(st.secrets.get("spreadsheet_id", ""))
+    return _read_sheet_cached(
+        spreadsheet_id=sid,
+        key=key,
+        expected_columns=tuple(expected_columns),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -165,3 +201,4 @@ def append_row(key: str, row: dict[str, Any], expected_columns: list[str]) -> No
     worksheet = spreadsheet.worksheet(SHEET_TAB_NAMES[key])
     values = [str(row.get(col, "")) for col in expected_columns]
     worksheet.append_row(values, value_input_option="USER_ENTERED")
+    invalidate_sheet_cache()

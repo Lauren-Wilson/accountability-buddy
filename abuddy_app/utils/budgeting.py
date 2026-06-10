@@ -148,7 +148,10 @@ def ensure_data_files(data_dir: Path) -> None:
     falls back to the original local-CSV behaviour.
     """
     if gsheets.is_configured():
-        gsheets.ensure_sheet_tabs(EXPECTED_COLUMNS, SAMPLE_ROWS)
+        try:
+            gsheets.ensure_sheet_tabs(EXPECTED_COLUMNS, SAMPLE_ROWS)
+        except Exception as exc:
+            st.warning(f"Google Sheets bootstrap is temporarily unavailable: {exc}")
         return
 
     # --- local CSV fallback ---
@@ -196,12 +199,14 @@ def _read_csv(data_dir: Path, key: str) -> pd.DataFrame:
 def load_settings(data_dir: Path) -> dict[str, str]:
     settings_frame = _read_csv(data_dir, "settings")
     settings = DEFAULT_SETTINGS.copy()
+    seen_keys: set[str] = set()
     settings_frame["setting"] = settings_frame["setting"].astype(str).str.strip()
     settings_frame["value"] = settings_frame["value"].astype(str).str.strip()
     for _, row in settings_frame.iterrows():
         key = str(row.get("setting", "")).strip()
-        if key:
+        if key and key not in seen_keys:
             settings[key] = str(row.get("value", "")).strip()
+            seen_keys.add(key)
     return settings
 
 
@@ -221,6 +226,21 @@ def load_transactions(data_dir: Path) -> pd.DataFrame:
 
 def load_recurring_bills(data_dir: Path) -> pd.DataFrame:
     bills = _read_csv(data_dir, "recurring_bills")
+
+    # Defensive normalization for hand-edited sheet headers.
+    normalized_columns = {str(col).strip().lower(): col for col in bills.columns}
+    if "due_day" not in bills.columns:
+        for alias in ["due day", "due_date", "due-date", "dueday"]:
+            if alias in normalized_columns:
+                bills["due_day"] = bills[normalized_columns[alias]]
+                break
+    if "active" not in bills.columns:
+        bills["active"] = True
+    if "bill_name" not in bills.columns:
+        bills["bill_name"] = ""
+    if "category" not in bills.columns:
+        bills["category"] = ""
+
     bills["amount"] = pd.to_numeric(bills["amount"], errors="coerce").fillna(0.0)
     bills["due_day"] = pd.to_numeric(bills["due_day"], errors="coerce").fillna(1).astype(int)
     bills["active"] = bills["active"].apply(lambda value: _safe_bool(value, True))
@@ -274,7 +294,7 @@ def auto_add_due_paychecks(
     baseline_start = (
         _parse_date(starting_cash_as_of_setting, anchor_payday)
         if starting_cash_as_of_setting
-        else anchor_payday
+        else reference_date
     )
 
     tx = transactions.copy()
@@ -305,6 +325,9 @@ def auto_add_due_paychecks(
         anchor_payday=anchor_payday,
         interval_days=pay_interval_days,
     )
+
+    # Never auto-add future paychecks; only due dates at or before reference_date.
+    due_paydays = [payday for payday in due_paydays if payday <= reference_date]
 
     added_count = 0
     for payday in due_paydays:
@@ -373,6 +396,13 @@ def get_leftover_from_prior_month(settings: dict[str, str], transactions: pd.Dat
 
 
 def get_recurring_bills_for_month(bills: pd.DataFrame, reference_date: date) -> pd.DataFrame:
+    if "due_day" not in bills.columns:
+        bills = bills.copy()
+        bills["due_day"] = 1
+    if "active" not in bills.columns:
+        bills = bills.copy()
+        bills["active"] = True
+
     active_bills = bills[bills["active"]].copy()
     active_bills["due_date"] = active_bills["due_day"].apply(
         lambda due_day: clamp_day(reference_date.year, reference_date.month, due_day)
@@ -398,9 +428,12 @@ def build_budget_snapshot(
     transactions = transactions.copy()
     transactions["signed_amount"] = transactions.apply(_signed_amount, axis=1)
     if starting_cash_as_of_setting:
-        starting_cash_as_of = _parse_date(starting_cash_as_of_setting, reference_date)
+        starting_cash_as_of = min(
+            _parse_date(starting_cash_as_of_setting, reference_date),
+            reference_date,
+        )
     else:
-        starting_cash_as_of = anchor_payday
+        starting_cash_as_of = min(anchor_payday, reference_date)
 
     through_today = transactions[
         (transactions["date"].dt.date >= starting_cash_as_of) & (transactions["date"].dt.date <= reference_date)
@@ -540,7 +573,7 @@ def build_pay_period_pie_data(snapshot: dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {"label": "Available funds", "value": max(snapshot["pay_period_available_funds"], 0.0)},
-            {"label": "Recurring due before next payday", "value": max(snapshot["pay_period_remaining_recurring_total"], 0.0)},
+            {"label": "Remaining recurring bills (month)", "value": max(snapshot["pay_period_remaining_recurring_total"], 0.0)},
             {"label": "Current pay-period spend", "value": max(snapshot["current_pay_period_spending_total"], 0.0)},
         ]
     )
@@ -549,6 +582,10 @@ def build_pay_period_pie_data(snapshot: dict[str, Any]) -> pd.DataFrame:
 def evaluate_what_if(snapshot: dict[str, Any], hypothetical_amount: float) -> dict[str, Any]:
     spend_amount = max(0.0, _safe_float(hypothetical_amount))
     remaining_after_purchase = round(snapshot["current_available_balance"] - spend_amount, 2)
+    after_remaining_bills_before_future_income = round(
+        remaining_after_purchase - snapshot["remaining_recurring_bills_total"],
+        2,
+    )
     projected_after_purchase = round(snapshot["projected_end_of_month_balance"] - spend_amount, 2)
 
     # Bills are considered covered when cash on hand plus paychecks still due this
@@ -558,6 +595,7 @@ def evaluate_what_if(snapshot: dict[str, Any], hypothetical_amount: float) -> di
 
     return {
         "remaining_after_purchase": remaining_after_purchase,
+        "after_remaining_bills_before_future_income": after_remaining_bills_before_future_income,
         "projected_after_purchase": projected_after_purchase,
         "bills_are_covered": bills_are_covered,
         "would_go_negative": remaining_after_purchase < 0 or projected_after_purchase < 0,
