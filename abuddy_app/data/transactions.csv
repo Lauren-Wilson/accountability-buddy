@@ -1,12 +1,3 @@
 date,amount,category,note,transaction_type
 2026-06-09,35.0,Doctor,,spend
-2026-06-09,100.02,Groceries,,spend
-2026-06-09,15.0, Doctor, spend,
-2026-06-09,445.0, Braces Downpayment, spend,
-2026-06-09,20.0, Carwash, spend,
-2026-06-09,1.58, Microsoft Resources, spend,
-2026-06-09,15.0, Canva, spend,
-2026-06-08,76.16, CPS Bill Old House, spend,
-2026-06-03,10.66, Github, spend,
-2026-06-01,24.07, Att Bill, spend,
-2026-06-02,126.65, Gym, spend,
+

@@ -21,6 +21,7 @@ from utils.budgeting import (
     load_transactions,
 )
 from utils.debt_math import compare_payment_scenarios
+from utils import gsheets
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -331,6 +332,17 @@ def render_recent_transactions(transactions: pd.DataFrame) -> None:
 
 def render_sidebar(settings: dict, effective_today: date, liabilities: pd.DataFrame) -> date:
     st.sidebar.header("Planner settings")
+
+    # --- data source indicator ---
+    if gsheets.is_configured():
+        sheet_url = gsheets.spreadsheet_url()
+        if sheet_url:
+            st.sidebar.success(f"[Google Sheets connected]({sheet_url})")
+        else:
+            st.sidebar.success("Google Sheets connected")
+    else:
+        st.sidebar.info("Data source: local CSV files")
+
     override_date = st.sidebar.date_input("Override today", value=effective_today)
     st.sidebar.caption(
         f"Known payday anchor: {settings['known_payday']} · every {settings['pay_interval_days']} days"

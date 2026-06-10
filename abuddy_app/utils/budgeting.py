@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+from utils import gsheets
 from utils.pay_schedule import (
     DEFAULT_KNOWN_PAYDAY,
     DEFAULT_PAY_INTERVAL_DAYS,
@@ -138,11 +139,17 @@ def _month_end(reference_date: date) -> date:
 
 
 def ensure_data_files(data_dir: Path) -> None:
-    """Create local CSV files with starter data when they do not exist.
+    """Bootstrap the data layer on first run.
 
-    The app is intentionally local-first, so every CSV lives in /data and is
-    created on demand to keep the MVP free and easy to run.
+    When Google Sheets credentials are configured the function creates any
+    missing worksheet tabs and seeds them with sample data.  Otherwise it
+    falls back to the original local-CSV behaviour.
     """
+    if gsheets.is_configured():
+        gsheets.ensure_sheet_tabs(EXPECTED_COLUMNS, SAMPLE_ROWS)
+        return
+
+    # --- local CSV fallback ---
     data_dir.mkdir(parents=True, exist_ok=True)
     for key, filename in DATA_FILES.items():
         path = data_dir / filename
@@ -166,8 +173,12 @@ def ensure_data_files(data_dir: Path) -> None:
 
 
 def _read_csv(data_dir: Path, key: str) -> pd.DataFrame:
-    path = data_dir / DATA_FILES[key]
     expected_columns = EXPECTED_COLUMNS[key]
+    if gsheets.is_configured():
+        return gsheets.read_sheet(key, expected_columns)
+
+    # --- local CSV fallback ---
+    path = data_dir / DATA_FILES[key]
     if not path.exists():
         return pd.DataFrame(columns=expected_columns)
     try:
@@ -229,6 +240,11 @@ def load_liabilities(data_dir: Path) -> pd.DataFrame:
 
 
 def append_transaction(data_dir: Path, row: dict[str, Any]) -> None:
+    if gsheets.is_configured():
+        gsheets.append_row("transactions", row, EXPECTED_COLUMNS["transactions"])
+        return
+
+    # --- local CSV fallback ---
     path = data_dir / DATA_FILES["transactions"]
     transactions = _read_csv(data_dir, "transactions")
     next_row = pd.DataFrame([row], columns=EXPECTED_COLUMNS["transactions"])
