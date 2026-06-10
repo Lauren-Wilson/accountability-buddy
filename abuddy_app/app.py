@@ -221,6 +221,31 @@ def parse_amount_input(raw_value: str) -> float | None:
     return int(digits_only) / 100.0
 
 
+def _queue_decimal_for_field(field_key: str) -> None:
+    st.session_state[f"{field_key}__pending_decimal"] = True
+
+
+def _apply_cents_precision(raw_value: str) -> str:
+    digits_only = re.sub(r"\D", "", str(raw_value or ""))
+    if not digits_only:
+        return str(raw_value or "")
+
+    padded = digits_only.zfill(3)
+    whole_part = str(int(padded[:-2]))
+    fractional_part = padded[-2:]
+    return f"{whole_part}.{fractional_part}"
+
+
+def _apply_pending_decimal(field_key: str) -> None:
+    pending_key = f"{field_key}__pending_decimal"
+    if not st.session_state.get(pending_key):
+        return
+
+    current = str(st.session_state.get(field_key, ""))
+    st.session_state[field_key] = _apply_cents_precision(current)
+    st.session_state[pending_key] = False
+
+
 def pie_figure(pie_data: pd.DataFrame, colors: list[str]) -> go.Figure:
     figure = go.Figure(
         data=[
@@ -245,13 +270,11 @@ def pie_figure(pie_data: pd.DataFrame, colors: list[str]) -> go.Figure:
 
 
 def render_header(snapshot: dict) -> None:
-    st.markdown('<div class="abuddy-card">', unsafe_allow_html=True)
     st.markdown('<div class="abuddy-title">Accountability Buddy</div>', unsafe_allow_html=True)
     st.markdown(
         f'<div class="abuddy-subtitle">A-Buddy helps you decide what you can safely spend on {snapshot["reference_date"].isoformat()}.</div>',
         unsafe_allow_html=True,
     )
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def render_metrics(snapshot: dict) -> None:
@@ -288,11 +311,19 @@ def render_transaction_forms(category_options: list[str], effective_today: date)
     st.subheader("Quick cash moves")
 
     entry_date = st.date_input("Date", value=effective_today, key="quick_date")
+    _apply_pending_decimal("quick_amount_text")
     amount_input = st.text_input(
         "Amount",
         value="",
         key="quick_amount_text",
         placeholder="0.00",
+    )
+    st.button(
+        "Add decimal (.)",
+        key="quick_amount_decimal",
+        use_container_width=True,
+        on_click=_queue_decimal_for_field,
+        args=("quick_amount_text",),
     )
 
     parsed_amount = parse_amount_input(amount_input)
@@ -352,11 +383,19 @@ def render_transaction_forms(category_options: list[str], effective_today: date)
 
 def render_forecast(snapshot: dict) -> None:
     st.subheader("What if I spend…")
+    _apply_pending_decimal("what_if_amount_text")
     amount_input = st.text_input(
         "Spend amount now",
         value="",
         key="what_if_amount_text",
         placeholder="0.00",
+    )
+    st.button(
+        "Add decimal (.)",
+        key="what_if_amount_decimal",
+        use_container_width=True,
+        on_click=_queue_decimal_for_field,
+        args=("what_if_amount_text",),
     )
     parsed_amount = parse_amount_input(amount_input)
     if parsed_amount is None:
