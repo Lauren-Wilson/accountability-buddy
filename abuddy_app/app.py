@@ -106,16 +106,48 @@ def inject_theme() -> None:
             .stButton > button {
                 width: 100%;
                 border-radius: 999px;
-                border: none;
+                border: 1px solid rgba(215, 38, 56, 0.22) !important;
                 min-height: 3.3rem;
                 font-weight: 800;
                 font-size: 1.05rem;
+                background: #fff3d6 !important;
+                color: #2b1d12 !important;
+                -webkit-appearance: none;
+                appearance: none;
+                box-shadow: 0 10px 22px rgba(92, 43, 20, 0.10);
+                transition: transform 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
             }
             .stFormSubmitButton > button {
                 width: 100%;
                 min-height: 3.1rem;
                 border-radius: 999px;
                 font-weight: 800;
+                border: 1px solid rgba(215, 38, 56, 0.22) !important;
+                background: #fff3d6 !important;
+                color: #2b1d12 !important;
+                -webkit-appearance: none;
+                appearance: none;
+                box-shadow: 0 10px 22px rgba(92, 43, 20, 0.10);
+                transition: transform 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+            }
+            .stButton > button:hover,
+            .stFormSubmitButton > button:hover {
+                background: #ffe8a8 !important;
+                color: #2b1d12 !important;
+                transform: translateY(-1px);
+                box-shadow: 0 14px 26px rgba(92, 43, 20, 0.14);
+            }
+            .stButton > button:active,
+            .stFormSubmitButton > button:active {
+                background: #ffd978 !important;
+                color: #2b1d12 !important;
+                transform: translateY(0);
+                box-shadow: 0 8px 16px rgba(92, 43, 20, 0.12);
+            }
+            .stButton > button:focus,
+            .stFormSubmitButton > button:focus {
+                outline: 2px solid rgba(215, 38, 56, 0.32) !important;
+                outline-offset: 2px;
             }
             .stTextInput input,
             .stNumberInput input,
@@ -125,6 +157,7 @@ def inject_theme() -> None:
                 background: rgba(255, 255, 255, 0.96) !important;
                 font-size: 1.15rem !important;
                 min-height: 3.2rem !important;
+                border: 1px solid rgba(215, 38, 56, 0.18) !important;
             }
             [data-testid="stWidgetLabel"] p,
             .stCaption,
@@ -162,6 +195,10 @@ def inject_theme() -> None:
                     min-height: 3.6rem !important;
                 }
                 .stButton > button {
+                    min-height: 3.8rem;
+                    font-size: 1.15rem;
+                }
+                .stFormSubmitButton > button {
                     min-height: 3.8rem;
                     font-size: 1.15rem;
                 }
