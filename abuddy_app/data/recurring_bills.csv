@@ -1,0 +1,15 @@
+bill_name,amount,due_day,category,active
+Mortgage,2486.88,10,Housing,True
+Student Loan,1188.88,1,Debt,True
+CPS Bill Old House,76.16,8,Utilities,True
+CPS Bill New House,250.0,16,Utilities,True
+Canva,15.0,9,Subscriptions,True
+Github,10.66,3,Subscriptions,True
+Gym,126.65,2,Subscriptions,True
+Att Bill,24.07,1,Subscriptions,True
+HBO Max,19.65,18,Subscriptions,True
+Chat GPT,20.0,20,Subscriptions,True
+Property Taxes,294.0,27,Housing,True
+Credit Card Payment,110.0,2,Debt,True
+Braces,85.0,20,Debt,True
+Roblox Premium,10.81,21,Subscriptions,True
