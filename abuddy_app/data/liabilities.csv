@@ -1,7 +1,7 @@
-name,balance,apr,current_payment,due_day
-Braces,1640.0,0.0,85.0,20
-Visa Signature Card,1439.8,0.0,110.0,2
-Loan 03,3552.26,4.53,57.49,1
-Loan 04,493.98,4.53,493.98,1
-Loan 05,15159.75,4.3,829.4,1
-Property Taxes,2274.85,0.0,294.0,27
+liability_id,group_id,name,balance,apr,min_payment,priority,active
+braces,other_debt,Braces,1640.0,0.0,85.0,1,True
+visa_signature,credit_cards,Visa Signature Card,1439.8,0.0,110.0,1,True
+loan_03,student_loans,Loan 03,3552.26,4.53,57.49,1,True
+loan_04,student_loans,Loan 04,0.0,4.53,0.0,2,False
+loan_05,student_loans,Loan 05,15159.75,4.3,829.4,3,True
+property_taxes,taxes,Property Taxes,2274.85,0.0,294.0,1,True

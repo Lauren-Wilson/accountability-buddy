@@ -27,6 +27,10 @@ SHEET_TAB_NAMES: dict[str, str] = {
     "recurring_bills": "recurring_bills",
     "liabilities": "liabilities",
     "settings": "settings",
+    "balance_snapshots": "balance_snapshots",
+    "bill_payment_log": "bill_payment_log",
+    "liability_payment_groups": "liability_payment_groups",
+    "liability_payment_log": "liability_payment_log",
 }
 
 CACHE_TTL_SECONDS = 20
@@ -201,4 +205,23 @@ def append_row(key: str, row: dict[str, Any], expected_columns: list[str]) -> No
     worksheet = spreadsheet.worksheet(SHEET_TAB_NAMES[key])
     values = [str(row.get(col, "")) for col in expected_columns]
     worksheet.append_row(values, value_input_option="USER_ENTERED")
+    invalidate_sheet_cache()
+
+
+def write_sheet(key: str, frame: pd.DataFrame, expected_columns: list[str]) -> None:
+    """Overwrite a worksheet tab with headers and all rows from ``frame``."""
+    spreadsheet = get_spreadsheet()
+    worksheet = spreadsheet.worksheet(SHEET_TAB_NAMES[key])
+
+    normalized = frame.copy()
+    for col in expected_columns:
+        if col not in normalized.columns:
+            normalized[col] = ""
+    normalized = normalized[expected_columns]
+
+    worksheet.clear()
+    worksheet.append_row(expected_columns, value_input_option="USER_ENTERED")
+    if not normalized.empty:
+        rows = normalized.fillna("").astype(str).values.tolist()
+        worksheet.append_rows(rows, value_input_option="USER_ENTERED")
     invalidate_sheet_cache()

@@ -9,21 +9,29 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from utils.budgeting import (
+    append_balance_snapshot,
+    append_bill_payment_log,
     auto_add_due_paychecks,
     append_transaction,
     build_pay_period_pie_data,
     build_budget_snapshot,
     build_recurring_status_pie_data,
-    derive_liability_balances,
+    append_liability_payment_log_rows,
     ensure_data_files,
     evaluate_what_if,
     get_category_options,
+    has_group_payment_for_month,
+    load_balance_snapshots,
+    load_bill_payment_log,
+    load_liability_payment_groups,
+    load_liability_payment_log,
     load_liabilities,
     load_recurring_bills,
     load_settings,
     load_transactions,
+    save_liabilities,
 )
-from utils.debt_math import compare_payment_scenarios
+from utils.debt_math import apply_group_payment, estimate_group_payoff
 from utils import gsheets
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -259,6 +267,21 @@ def parse_amount_input(raw_value: str) -> float | None:
     return int(digits_only) / 100.0
 
 
+def parse_balance_input(raw_value: str) -> float | None:
+    value = str(raw_value or "").strip()
+    if not value:
+        return None
+
+    normalized = re.sub(r"[,$\s]", "", value)
+    if not normalized:
+        return None
+
+    try:
+        return float(normalized)
+    except ValueError:
+        return None
+
+
 def _queue_decimal_for_field(field_key: str) -> None:
     st.session_state[f"{field_key}__pending_decimal"] = True
 
@@ -285,6 +308,7 @@ def _apply_pending_decimal(field_key: str) -> None:
 
 
 def pie_figure(pie_data: pd.DataFrame, colors: list[str]) -> go.Figure:
+    pulls = pie_data["pull"].tolist() if "pull" in pie_data.columns else None
     figure = go.Figure(
         data=[
             go.Pie(
@@ -293,6 +317,7 @@ def pie_figure(pie_data: pd.DataFrame, colors: list[str]) -> go.Figure:
                 hole=0.0,
                 sort=False,
                 marker={"colors": colors},
+                pull=pulls,
                 textinfo="label+percent",
                 hovertemplate="%{label}<br>%{value:$,.2f}<extra></extra>",
             )
@@ -318,13 +343,17 @@ def render_header(snapshot: dict) -> None:
 def render_metrics(snapshot: dict) -> None:
     col1, col2 = st.columns(2)
     col3, col4 = st.columns(2)
-    col1.metric("Current available balance", money(snapshot["current_available_balance"]))
+    balance_label = "Current available balance"
+    if snapshot.get("has_manual_balance_snapshot"):
+        balance_label = "Current balance (manual)"
+    col1.metric(balance_label, money(snapshot["current_available_balance"]))
     col2.metric("Next payday", snapshot["next_payday"].strftime("%a, %b %d"))
     col3.metric("Days until payday", str(snapshot["days_until_payday"]))
     col4.metric("Projected end-of-month", money(snapshot["projected_end_of_month_balance"]))
-    st.caption(
-        "Projected end-of-month includes remaining paychecks in this month and subtracts remaining recurring bills."
-    )
+    if snapshot.get("last_balance_update_date") is not None:
+        st.caption(f"Last balance update date: {snapshot['last_balance_update_date'].isoformat()}")
+    else:
+        st.caption("No manual balance snapshot yet. Current balance is derived from transactions.")
 
 
 def render_budget_pies(snapshot: dict) -> None:
@@ -335,14 +364,43 @@ def render_budget_pies(snapshot: dict) -> None:
         use_container_width=True,
     )
 
-    st.subheader("Current pay period")
+    st.subheader("Monthly cash and bill status")
     st.caption(
-        f"{snapshot['pay_period_start'].isoformat()} to {snapshot['pay_period_end'].isoformat()}: available cash, remaining recurring bills for this month, and non-recurring spend so far."
+        "Paid/unpaid recurring bills, manual spending, remaining after unpaid bills, and leftover from prior month."
     )
     st.plotly_chart(
-        pie_figure(build_pay_period_pie_data(snapshot), ["#ffc72c", "#d72638", "#2f9e44"]),
+        pie_figure(build_pay_period_pie_data(snapshot), ["#2f9e44", "#d72638", "#3b82f6", "#ffc72c", "#8b5e3c"]),
         use_container_width=True,
     )
+
+
+def render_balance_update(snapshot: dict, effective_today: date) -> None:
+    st.subheader("Update Current Balance")
+    with st.form("balance_snapshot_form", clear_on_submit=True):
+        snapshot_date = st.date_input("Balance date", value=effective_today, key="balance_snapshot_date")
+        balance_input = st.text_input("Current balance", value="", key="balance_snapshot_amount", placeholder="0.00")
+        note = st.text_input("Note (optional)", value="", key="balance_snapshot_note")
+        submitted = st.form_submit_button("Save balance snapshot", use_container_width=True)
+
+    parsed_balance = parse_balance_input(balance_input)
+    if balance_input.strip() and parsed_balance is not None:
+        st.caption(f"Balance preview: **{money(parsed_balance)}**")
+
+    if submitted:
+        if parsed_balance is None:
+            st.error("Enter a valid current balance.")
+            return
+
+        append_balance_snapshot(
+            DATA_DIR,
+            {
+                "date": snapshot_date.isoformat(),
+                "balance": parsed_balance,
+                "note": note,
+            },
+        )
+        st.success("Current balance updated.")
+        st.rerun()
 
 
 def render_transaction_forms(category_options: list[str], effective_today: date) -> None:
@@ -448,17 +506,13 @@ def render_forecast(snapshot: dict) -> None:
             return
 
         result = evaluate_what_if(snapshot, parsed_amount)
-        after_remaining_bills_before_future_income = result.get(
-            "after_remaining_bills_before_future_income",
-            round(result["remaining_after_purchase"] - snapshot["remaining_recurring_bills_total"], 2),
-        )
+        after_remaining_bills_before_future_income = result.get("after_remaining_bills_before_future_income", 0.0)
         st.markdown('<div class="abuddy-card">', unsafe_allow_html=True)
-        st.write(f"Cash after this spend today: **{money(result['remaining_after_purchase'])}**")
+        st.write(f"Current manual balance: **{money(snapshot['current_available_balance'])}**")
+        st.write(f"Unpaid recurring bills remaining: **{money(result['unpaid_bills_remaining'])}**")
+        st.write(f"Hypothetical spend: **{money(result['hypothetical_spend'])}**")
         st.write(
-            f"Cash after this spend and remaining recurring bills (before future paychecks): **{money(after_remaining_bills_before_future_income)}**"
-        )
-        st.write(
-            f"Projected end-of-month after purchase (remaining pay periods this month): **{money(result['projected_after_purchase'])}**"
+            f"Projected balance after unpaid bills and hypothetical spend: **{money(after_remaining_bills_before_future_income)}**"
         )
         st.write(
             "Upcoming bills covered: **Yes**"
@@ -472,18 +526,51 @@ def render_forecast(snapshot: dict) -> None:
         st.markdown('</div>', unsafe_allow_html=True)
 
 
-def render_bills(snapshot: dict) -> None:
+def render_bills(snapshot: dict, effective_today: date) -> None:
     st.subheader("Recurring bills this month")
     if snapshot["bills_this_month"].empty:
         st.info("No active recurring bills found.")
         return
 
-    display = snapshot["bills_this_month"][["bill_name", "amount", "due_date", "category"]].copy()
+    bills = snapshot["bills_this_month"].copy()
+    display = bills[["bill_name", "amount", "due_date", "category", "is_paid"]].copy()
     display["amount"] = display["amount"].map(money)
     display["due_date"] = display["due_date"].astype(str)
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    display["status"] = display["is_paid"].map(lambda paid: "Paid" if bool(paid) else "Unpaid")
+    display = display.drop(columns=["is_paid"])
+
+    def _status_style(value: object) -> str:
+        if str(value) == "Paid":
+            return "color: #1b8f5a; font-weight: 800;"
+        return "color: #d72638; font-weight: 800;"
+
+    styled_display = display.style.applymap(_status_style, subset=["status"])
+    st.dataframe(styled_display, use_container_width=True, hide_index=True)
+
+    unpaid = bills[~bills["is_paid"]]
+    if not unpaid.empty:
+        st.caption("Mark monthly recurring bills as paid:")
+        for _, bill in unpaid.iterrows():
+            label = f"Mark paid: {bill['bill_name']} ({money(float(bill['amount']))})"
+            if st.button(label, key=f"mark_paid_{snapshot['month_key']}_{bill['bill_id']}", use_container_width=True):
+                created = append_bill_payment_log(
+                    DATA_DIR,
+                    {
+                        "bill_id": bill["bill_id"],
+                        "paid_date": effective_today.isoformat(),
+                        "month": snapshot["month_key"],
+                        "amount_paid": float(bill["amount"]),
+                        "note": "",
+                    },
+                )
+                if created:
+                    st.success(f"Logged {bill['bill_name']} as paid for {snapshot['month_key']}.")
+                    st.rerun()
+                st.info(f"{bill['bill_name']} is already marked paid for {snapshot['month_key']}.")
+
+    projected_after_unpaid = snapshot["current_available_balance"] - snapshot["remaining_recurring_bills_total"]
     st.caption(
-        f"Paid recurring bills this month: {money(snapshot['paid_recurring_bills_total'])} · Remaining recurring bills this month: {money(snapshot['remaining_recurring_bills_total'])}"
+        f"Paid recurring bills this month: {money(snapshot['paid_recurring_bills_total'])} · Unpaid recurring bills this month: {money(snapshot['remaining_recurring_bills_total'])} · Projected balance after unpaid bills: {money(projected_after_unpaid)}"
     )
 
 
@@ -499,7 +586,66 @@ def render_recent_transactions(transactions: pd.DataFrame) -> None:
     st.dataframe(display, use_container_width=True, hide_index=True)
 
 
-def render_sidebar(settings: dict, effective_today: date, liabilities: pd.DataFrame, transactions: pd.DataFrame) -> date:
+def _ensure_groups_cover_liabilities(
+    liability_payment_groups: pd.DataFrame,
+    liabilities: pd.DataFrame,
+) -> pd.DataFrame:
+    groups = liability_payment_groups.copy()
+    if groups.empty:
+        groups = pd.DataFrame(columns=["group_id", "group_name", "payment_amount", "strategy", "active"])
+
+    for column in ["group_id", "group_name", "payment_amount", "strategy"]:
+        if column not in groups.columns:
+            groups[column] = "" if column in {"group_id", "group_name", "strategy"} else 0.0
+    if "active" not in groups.columns:
+        groups["active"] = True
+
+    groups["group_id"] = groups["group_id"].astype(str).str.strip().str.lower()
+    groups["group_name"] = groups["group_name"].astype(str).str.strip()
+    groups["payment_amount"] = pd.to_numeric(groups["payment_amount"], errors="coerce").fillna(0.0)
+    groups["active"] = groups["active"].astype(str).str.strip().str.lower().isin(["true", "1", "yes", "y"]) | (groups["active"] == True)
+    groups["strategy"] = "priority"
+
+    if liabilities.empty:
+        return groups[["group_id", "group_name", "payment_amount", "strategy", "active"]]
+
+    liab = liabilities.copy()
+    liab["group_id"] = liab["group_id"].fillna("").astype(str).str.strip().str.lower()
+    if "min_payment" not in liab.columns:
+        liab["min_payment"] = 0.0
+    liab["min_payment"] = pd.to_numeric(liab["min_payment"], errors="coerce").fillna(0.0)
+    liab = liab[liab["group_id"] != ""]
+
+    existing_group_ids = set(groups["group_id"].tolist())
+    inferred_rows = []
+    for group_id, frame in liab.groupby("group_id"):
+        if group_id in existing_group_ids:
+            continue
+        inferred_rows.append(
+            {
+                "group_id": group_id,
+                "group_name": group_id.replace("_", " ").title(),
+                "payment_amount": round(float(frame["min_payment"].sum()), 2),
+                "strategy": "priority",
+                "active": True,
+            }
+        )
+
+    if inferred_rows:
+        groups = pd.concat([groups, pd.DataFrame(inferred_rows)], ignore_index=True)
+
+    groups.loc[groups["group_name"] == "", "group_name"] = groups["group_id"]
+    groups = groups.drop_duplicates(subset=["group_id"], keep="last")
+    return groups[["group_id", "group_name", "payment_amount", "strategy", "active"]]
+
+
+def render_sidebar(
+    settings: dict,
+    effective_today: date,
+    liabilities: pd.DataFrame,
+    liability_payment_groups: pd.DataFrame,
+    liability_payment_log: pd.DataFrame,
+) -> date:
     st.sidebar.header("Planner settings")
 
     # --- data source indicator ---
@@ -522,47 +668,141 @@ def render_sidebar(settings: dict, effective_today: date, liabilities: pd.DataFr
     )
 
     st.sidebar.divider()
-    st.sidebar.subheader("Liabilities")
-    if liabilities.empty:
-        st.sidebar.info("No liabilities loaded.")
+    st.sidebar.subheader("Liability Payments")
+    if liabilities.empty or liability_payment_groups.empty:
+        st.sidebar.info("No liability groups configured.")
         return override_date
 
-    derived_liabilities = derive_liability_balances(liabilities, transactions, override_date)
+    if "last_liability_payment_table" in st.session_state:
+        st.sidebar.caption("Most recent applied payment")
+        st.sidebar.dataframe(st.session_state["last_liability_payment_table"], use_container_width=True, hide_index=True)
 
-    for index, liability in derived_liabilities.iterrows():
-        with st.sidebar.expander(str(liability["name"]), expanded=index == 0):
-            current_balance = float(liability.get("current_balance", liability["balance"]))
-            current_payment = float(liability.get("current_payment", 0.0))
-            comparison = compare_payment_scenarios(
-                balance=current_balance,
-                apr=liability["apr"],
-                current_payment=current_payment,
-                test_payment=st.number_input(
-                    f"Test higher payment for {liability['name']}",
-                    min_value=current_payment,
-                    value=current_payment,
-                    step=10.0,
-                    key=f"test_payment_{index}",
-                ),
-                start_date=override_date,
-                due_day=int(liability["due_day"]),
+    for _, group in liability_payment_groups[liability_payment_groups["active"]].iterrows():
+        group_id = str(group["group_id"])
+        group_name = str(group["group_name"])
+        payment_amount = float(group["payment_amount"])
+        strategy = str(group["strategy"])
+
+        group_liabilities = liabilities[
+            (liabilities["group_id"] == group_id)
+            & (liabilities["active"])
+            & (liabilities["balance"] > 0)
+        ].copy()
+
+        with st.sidebar.expander(f"{group_name} ({group_id})", expanded=False):
+            total_balance = float(group_liabilities["balance"].sum()) if not group_liabilities.empty else 0.0
+            estimate = estimate_group_payoff(group_liabilities, payment_amount, strategy, override_date)
+            st.write(f"Payment amount: **{money(payment_amount)}**")
+            st.write(f"Active liabilities: **{len(group_liabilities)}**")
+            st.write(f"Total balance: **{money(total_balance)}**")
+
+            if estimate["months_remaining"] is not None and estimate["projected_payoff_date"] is not None:
+                st.write(f"Estimated months remaining: **{estimate['months_remaining']}**")
+                st.write(f"Projected payoff month: **{estimate['projected_payoff_date'].strftime('%Y-%m')}**")
+            else:
+                st.warning("Could not estimate payoff with the current payment amount.")
+
+            test_payment = st.number_input(
+                "What if I paid this amount instead?",
+                min_value=0.0,
+                value=payment_amount,
+                step=25.0,
+                key=f"what_if_group_{group_id}",
             )
-            current = comparison["current"]
-            test = comparison["test"]
-            st.write(f"Original balance: **{money(float(liability['original_balance']))}**")
-            st.write(f"Paid to date: **{money(float(liability['paid_to_date']))}**")
-            st.write(f"Current balance: **{money(current_balance)}**")
-            st.write(f"Current payment: **{money(current_payment)}**")
-            if current["months_remaining"] is not None and current["payoff_date"] is not None:
-                st.write(f"Estimated months remaining: **{current['months_remaining']}**")
-                st.write(f"Projected payoff date: **{current['payoff_date'].isoformat()}**")
+            test_estimate = estimate_group_payoff(group_liabilities, test_payment, strategy, override_date)
+            if test_estimate["months_remaining"] is not None:
+                st.caption(
+                    f"Forecast only: {test_estimate['months_remaining']} months remaining, payoff around {test_estimate['projected_payoff_date'].strftime('%Y-%m')}"
+                )
             else:
-                st.warning("Current payment is too low to estimate payoff cleanly.")
+                st.caption("Forecast only: payoff cannot be estimated at this payment level.")
 
-            if test["months_remaining"] is not None:
-                st.write(f"Months remaining with test payment: **{test['months_remaining']}**")
-            else:
-                st.write("Months remaining with test payment: **Not available**")
+            payment_month = override_date.strftime("%Y-%m")
+            already_paid_this_month = has_group_payment_for_month(liability_payment_log, group_id, payment_month)
+            if already_paid_this_month:
+                st.warning("A payment has already been applied for this group this month.")
+
+            allow_duplicate = st.checkbox(
+                "Apply another payment anyway.",
+                value=False,
+                key=f"allow_duplicate_{group_id}_{payment_month}",
+                disabled=not already_paid_this_month,
+            )
+
+            apply_clicked = st.button(
+                "Apply Monthly Payment",
+                key=f"apply_monthly_group_{group_id}",
+                use_container_width=True,
+            )
+
+            if apply_clicked:
+                if group_liabilities.empty:
+                    st.info("All liabilities in this group are already paid off.")
+                    continue
+
+                if already_paid_this_month and not allow_duplicate:
+                    st.warning("A payment has already been applied for this group this month.")
+                    continue
+
+                updated_liabilities, payment_rows, unapplied_remainder = apply_group_payment(
+                    group_liabilities,
+                    payment_amount,
+                    strategy,
+                )
+
+                liabilities_after = liabilities.copy()
+                updates = updated_liabilities[["liability_id", "balance", "active"]].copy()
+                updates = updates.set_index("liability_id")
+                for liability_id, row in updates.iterrows():
+                    mask = liabilities_after["liability_id"] == liability_id
+                    liabilities_after.loc[mask, "balance"] = float(row["balance"])
+                    liabilities_after.loc[mask, "active"] = bool(row["active"])
+
+                save_liabilities(DATA_DIR, liabilities_after)
+
+                payment_log_rows = []
+                for _, payment_row in payment_rows.iterrows():
+                    payment_log_rows.append(
+                        {
+                            "payment_date": override_date.isoformat(),
+                            "payment_month": payment_month,
+                            "group_id": group_id,
+                            "liability_id": payment_row["liability_id"],
+                            "amount_applied": float(payment_row["amount_applied"]),
+                            "interest_applied": float(payment_row["interest_applied"]),
+                            "principal_applied": float(payment_row["principal_applied"]),
+                            "starting_balance": float(payment_row["starting_balance"]),
+                            "ending_balance": float(payment_row["ending_balance"]),
+                            "note": "Applied from sidebar monthly group payment",
+                        }
+                    )
+
+                append_liability_payment_log_rows(DATA_DIR, payment_log_rows)
+
+                confirmation = payment_rows.copy()
+                if confirmation.empty:
+                    confirmation = pd.DataFrame(
+                        [{
+                            "liability_id": "(none)",
+                            "amount_applied": 0.0,
+                            "interest_applied": 0.0,
+                            "principal_applied": 0.0,
+                            "starting_balance": 0.0,
+                            "ending_balance": 0.0,
+                        }]
+                    )
+                confirmation["amount_applied"] = confirmation["amount_applied"].map(money)
+                confirmation["interest_applied"] = confirmation["interest_applied"].map(money)
+                confirmation["principal_applied"] = confirmation["principal_applied"].map(money)
+                confirmation["starting_balance"] = confirmation["starting_balance"].map(money)
+                confirmation["ending_balance"] = confirmation["ending_balance"].map(money)
+                st.session_state["last_liability_payment_table"] = confirmation
+
+                if unapplied_remainder > 0:
+                    st.info(f"{money(unapplied_remainder)} remained after paying off all active liabilities in this group.")
+                st.success("Monthly payment applied and liabilities updated.")
+                st.rerun()
+
     return override_date
 
 
@@ -574,13 +814,31 @@ def main() -> None:
     transactions = load_transactions(DATA_DIR)
     recurring_bills = load_recurring_bills(DATA_DIR)
     liabilities = load_liabilities(DATA_DIR)
+    liability_payment_groups = load_liability_payment_groups(DATA_DIR)
+    liability_payment_groups = _ensure_groups_cover_liabilities(liability_payment_groups, liabilities)
+    liability_payment_log = load_liability_payment_log(DATA_DIR)
+    balance_snapshots = load_balance_snapshots(DATA_DIR)
+    bill_payment_log = load_bill_payment_log(DATA_DIR)
 
-    effective_today = render_sidebar(settings, date.today(), liabilities, transactions)
+    effective_today = render_sidebar(
+        settings,
+        date.today(),
+        liabilities,
+        liability_payment_groups,
+        liability_payment_log,
+    )
 
     auto_add_due_paychecks(DATA_DIR, transactions, settings, effective_today)
     transactions = load_transactions(DATA_DIR)
 
-    snapshot = build_budget_snapshot(transactions, recurring_bills, settings, effective_today)
+    snapshot = build_budget_snapshot(
+        transactions,
+        recurring_bills,
+        settings,
+        effective_today,
+        balance_snapshots=balance_snapshots,
+        bill_payment_log=bill_payment_log,
+    )
     category_options = get_category_options(transactions, recurring_bills, liabilities)
 
     render_header(snapshot)
@@ -589,8 +847,9 @@ def main() -> None:
     render_budget_pies(snapshot)
 
     render_transaction_forms(category_options, effective_today)
+    render_balance_update(snapshot, effective_today)
     render_forecast(snapshot)
-    render_bills(snapshot)
+    render_bills(snapshot, effective_today)
     render_recent_transactions(transactions)
 
 

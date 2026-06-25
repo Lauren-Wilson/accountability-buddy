@@ -1,15 +1,16 @@
-bill_name,amount,due_day,category,active
-Mortgage,2486.88,10,Housing,True
-Student Loan,1188.88,1,Debt,True
-CPS Bill Old House,76.16,8,Utilities,True
-CPS Bill New House,250.0,16,Utilities,True
-Canva,15.0,9,Subscriptions,True
-Github,10.66,3,Subscriptions,True
-Gym,126.65,2,Subscriptions,True
-Att Bill,24.07,1,Subscriptions,True
-HBO Max,19.65,18,Subscriptions,True
-Chat GPT,20.0,20,Subscriptions,True
-Property Taxes,294.0,27,Housing,True
-Credit Card Payment,110.0,2,Debt,True
-Braces,85.0,20,Debt,True
-Roblox Premium,10.81,21,Subscriptions,True
+bill_id,bill_name,amount,due_day,category,active,split_group
+mortgage_1,Mortgage - First Half,1243.44,10,Housing,True,mortgage
+mortgage_2,Mortgage - Second Half,1243.44,24,Housing,True,mortgage
+student_loan,Student Loan,1188.88,1,Debt,True,
+cps_old_house,CPS Bill Old House,76.16,8,Utilities,True,
+cps_new_house,CPS Bill New House,250.0,16,Utilities,True,
+canva,Canva,15.0,9,Subscriptions,True,
+github,Github,10.66,3,Subscriptions,True,
+gym,Gym,126.65,2,Subscriptions,True,
+att_bill,Att Bill,24.07,1,Subscriptions,True,
+hbo_max,HBO Max,19.65,18,Subscriptions,True,
+chat_gpt,Chat GPT,20.0,20,Subscriptions,True,
+property_taxes,Property Taxes,294.0,27,Housing,True,
+credit_card_payment,Credit Card Payment,110.0,2,Debt,True,
+braces,Braces,85.0,20,Debt,True,
+roblox_premium,Roblox Premium,10.81,21,Subscriptions,True,
